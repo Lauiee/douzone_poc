@@ -168,6 +168,8 @@ class KoBERTContextCorrector:
             chosen_stem, _ = split_josa(chosen.surface)
             chosen_josa = harmonize_josa(chosen_stem, orig_josa)
             corrected_surface = chosen_stem + chosen_josa
+            if abs(len(corrected_surface) - len(original)) >= 2:
+                continue
             if not speech_endings_compatible(original, corrected_surface):
                 continue
             out = out[:start] + corrected_surface + out[end:]

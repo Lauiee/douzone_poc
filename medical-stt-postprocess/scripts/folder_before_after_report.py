@@ -99,7 +99,8 @@ def main() -> None:
     if not files:
         raise SystemExit(f"입력 txt 파일이 없습니다: {args.input_dir}")
 
-    pipeline = MedicalSTTPipeline()
+    # 리포트 생성은 빠른 회귀 확인 목적이라 기본적으로 KoGPT2를 끈다.
+    pipeline = MedicalSTTPipeline(enable_kogpt2=False)
     sections: list[tuple[str, str, str]] = []
 
     for idx, path in enumerate(files, 1):
