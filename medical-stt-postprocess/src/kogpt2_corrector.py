@@ -48,6 +48,11 @@ KOGPT2_PROTECTED_STEMS = frozenset({
     "말",
     "초기",
     "말기",
+    # 1인칭 대명사: 존댓말 문맥에서 '내가/뭐가' 등으로 과교정되는 것을 차단
+    "제가",
+    "저는",
+    "저를",
+    "저도",
 })
 
 
@@ -69,6 +74,28 @@ class KoGPT2Corrector:
         # 의료사전 후보만: NLL이 소폭 악화돼도 MLM이 충분하면 채택 (예: 이번→입원)
         max_nll_penalty_for_medical: float = 0.6,
         medical_relax_mlm_min_prob: float = 0.05,
+        # 멀티토큰(2-subword) 후보: 양방향 조건부 MLM + 자모 필터 (예: 타신→탓인, 조이→쪽이)
+        # 안전장치: 원문 stem이 정확히 2자인 경우에만 시도하며, 후보 stem 길이도 2자로 고정,
+        # joint MLM prob 하한과 원문 대비 prob 비율 하한으로 과교정을 차단한다.
+        multi_token_enable: bool = True,
+        multi_token_span_chars: int = 2,
+        multi_token_k1: int = 10,
+        multi_token_k2: int = 12,
+        multi_token_max_candidates: int = 16,
+        # 후보 생성 단계의 joint MLM prob 하한 (너무 드문 조합 컷)
+        multi_token_min_joint_prob: float = 5e-4,
+        # 멀티토큰 전용 후보 채택 조건:
+        #  - KoGPT2 NLL 악화 금지 (multi_token_nll_min_improve 이상, 기본 0 = 동률 허용)
+        #  - 후보 MLM joint prob ≥ multi_token_accept_min_prob (기본 1e-3)
+        #  - 후보 prob / 원문 prob ≥ multi_token_accept_min_prob_ratio (기본 10배)
+        # 이렇게 MLM 척도로 채택을 결정, NLL 은 안전장치로만 사용한다. KoGPT2 가
+        # 타신↔탓인 같은 짧은 Korean 2-글자 교정의 PPL 차이를 사실상 구분 못하기 때문.
+        multi_token_nll_min_improve: float = 0.01,
+        multi_token_accept_min_prob: float = 1e-3,
+        multi_token_accept_min_prob_ratio: float = 10.0,
+        # 원문이 MLM 관점에서 정상(=prob 가 임계치 이상)이면 멀티토큰 교정 자체 차단.
+        # 타신, 조이처럼 원문이 문맥상 매우 드문 경우에만 발화. STT 오류 교정 용도.
+        multi_token_max_orig_prob: float = 1e-5,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -96,10 +123,21 @@ class KoGPT2Corrector:
         self.max_nll_penalty_for_medical = float(max_nll_penalty_for_medical)
         self.medical_relax_mlm_min_prob = float(medical_relax_mlm_min_prob)
 
+        self.multi_token_enable = bool(multi_token_enable)
+        self.multi_token_span_chars = int(multi_token_span_chars)
+        self.multi_token_k1 = int(multi_token_k1)
+        self.multi_token_k2 = int(multi_token_k2)
+        self.multi_token_max_candidates = int(multi_token_max_candidates)
+        self.multi_token_min_joint_prob = float(multi_token_min_joint_prob)
+        self.multi_token_nll_min_improve = float(multi_token_nll_min_improve)
+        self.multi_token_accept_min_prob = float(multi_token_accept_min_prob)
+        self.multi_token_accept_min_prob_ratio = float(multi_token_accept_min_prob_ratio)
+        self.multi_token_max_orig_prob = float(multi_token_max_orig_prob)
+
         self._nll_cache: dict[str, float] = {}
         logger.info(
             "KoGPT2Corrector 초기화 완료 (의료사전 %d개, 의료자모≤%d, RoBERTa자모≤%d, "
-            "RoBERTa후보=%s, MLM=%s)",
+            "RoBERTa후보=%s, MLM=%s, 멀티토큰=%s)",
             len(self.medical_terms),
             max_jamo_distance,
             roberta_max_jamo_distance,
@@ -109,6 +147,11 @@ class KoGPT2Corrector:
                 else "top-k만"
             ),
             "주입" if proposal_model else "없음",
+            (
+                f"k1={multi_token_k1}·k2={multi_token_k2}·자모≤{roberta_max_jamo_distance}"
+                if multi_token_enable
+                else "off"
+            ),
         )
 
     def _word_spans(self, text: str) -> list[tuple[int, int, str]]:
@@ -191,6 +234,110 @@ class KoGPT2Corrector:
             p *= float(mlm_probs[tid].item())
         return p
 
+    # ------------------------------------------------------------------
+    # 멀티토큰(2-subword) 후보 생성: 양방향 조건부 MLM + 자모 필터
+    # ------------------------------------------------------------------
+    def _token_piece(self, tid: int) -> str:
+        raw = self.proposal_tokenizer.convert_ids_to_tokens(int(tid)) or ""
+        return raw[2:] if raw.startswith("##") else raw
+
+    def _multi_token_candidates(
+        self,
+        text: str,
+        start: int,
+        end: int,
+        original: str,
+    ) -> list[tuple[str, float]]:
+        """스팬 전체를 2-[MASK] 로 치환해 양방향 조건부 top-k 조합을 자모거리로 필터링.
+
+        단일-[MASK] 경로는 서브워드 1 개짜리 후보만 만들 수 있어 `탓+##인`, `쪽+##이`
+        같은 2-서브워드 교정을 구조적으로 놓친다. josa 를 따로 떼지 않고 원문 전체
+        surface 길이(기본 2자)가 정확히 `multi_token_span_chars` 일 때만 시도하고,
+        두 [MASK] 를 두고
+          - LTR: pos0 top-k1 → 각 pos0 고정 후 pos1 조건부 top-k2
+          - RTL: pos1 top-k1 → 각 pos1 고정 후 pos0 조건부 top-k2
+        두 경로의 모든 조합 중 자모거리 ≤ roberta_max_jamo_distance 이고
+        joint prob ≥ multi_token_min_joint_prob 인 것만 남겨 상위 N 개를 반환한다.
+        반환 surface 에는 josa harmonize 를 하지 않는다 (모델이 조사까지 예측).
+        """
+        if self.proposal_model is None or self.proposal_tokenizer is None:
+            return []
+        if not self.multi_token_enable:
+            return []
+        if len(original) != self.multi_token_span_chars:
+            return []
+
+        tok = self.proposal_tokenizer
+        mid = tok.mask_token_id
+        cls = tok.cls_token_id
+        sep = tok.sep_token_id
+        if mid is None or cls is None or sep is None:
+            return []
+
+        prefix_ids = tok(text[:start], add_special_tokens=False)["input_ids"]
+        suffix_ids = tok(text[end:], add_special_tokens=False)["input_ids"]
+        pos0 = 1 + len(prefix_ids)
+        pos1 = pos0 + 1
+
+        def logits_with(mid_ids: list[int]) -> torch.Tensor:
+            full = [cls] + prefix_ids + mid_ids + suffix_ids + [sep]
+            inp = torch.tensor([full], device=self.device)
+            with torch.no_grad():
+                out = self.proposal_model(input_ids=inp)
+            return out.logits[0]
+
+        def topk_at(logits: torch.Tensor, pos: int, k: int) -> list[tuple[int, float]]:
+            probs = F.softmax(logits[pos].float(), dim=-1)
+            tp, ti = torch.topk(probs, k=min(k, int(probs.shape[0])))
+            return [(int(i.item()), float(p_.item())) for p_, i in zip(tp, ti)]
+
+        orig_jamo = to_jamo(original)
+        jamo_limit = self.roberta_max_jamo_distance
+        target_len = self.multi_token_span_chars
+        jp_floor = self.multi_token_min_joint_prob
+
+        cands: dict[str, float] = {}
+        base_logits = logits_with([mid, mid])
+
+        def consider(s0: str, s1: str, jp: float) -> None:
+            if not s0 or not s1:
+                return
+            if not _KOREAN.fullmatch(s0) or not _KOREAN.fullmatch(s1):
+                return
+            surf = s0 + s1
+            if len(surf) != target_len:
+                return
+            if surf == original:
+                return
+            if Levenshtein.distance(orig_jamo, to_jamo(surf)) > jamo_limit:
+                return
+            if jp < jp_floor:
+                return
+            if jp > cands.get(surf, 0.0):
+                cands[surf] = jp
+
+        # LTR: pos0 top-k1 → 각 pos0 고정 후 pos1 조건부 top-k2
+        for tid0, p0 in topk_at(base_logits, pos0, self.multi_token_k1):
+            s0 = self._token_piece(tid0)
+            if not s0:
+                continue
+            cond_logits = logits_with([tid0, mid])
+            for tid1, p1 in topk_at(cond_logits, pos1, self.multi_token_k2):
+                consider(s0, self._token_piece(tid1), p0 * p1)
+
+        # RTL: pos1 top-k1 → 각 pos1 고정 후 pos0 조건부 top-k2
+        for tid1, p1 in topk_at(base_logits, pos1, self.multi_token_k1):
+            s1 = self._token_piece(tid1)
+            if not s1:
+                continue
+            cond_logits = logits_with([mid, tid1])
+            for tid0, p0 in topk_at(cond_logits, pos0, self.multi_token_k2):
+                consider(self._token_piece(tid0), s1, p0 * p1)
+
+        if not cands:
+            return []
+        return sorted(cands.items(), key=lambda x: -x[1])[: self.multi_token_max_candidates]
+
     def _build_candidates(
         self,
         text: str,
@@ -198,12 +345,16 @@ class KoGPT2Corrector:
         end: int,
         original: str,
         top_k: int,
-    ) -> tuple[list[tuple[str, float]], torch.Tensor | None]:
-        """(후보 표면, 해당 위치 MLM 확률) 목록 + 마스크 MLM 분포(타이브레이크·원문 확률용)."""
+    ) -> tuple[list[tuple[str, float]], torch.Tensor | None, set[str], set[str]]:
+        """(후보 표면, 해당 위치 MLM 확률) 목록 + 마스크 MLM 분포(타이브레이크·원문 확률용)
+        + 멀티토큰 경로에서만 생성된 surface 집합 (NLL 게이트에서 더 엄격 적용용)
+        + RoBERTa full-vocab jamo 경로에서만 생성된 surface 집합 (MLM 타이브레이크 차단용).
+        의료사전(_jamo_candidates) 출신 후보는 vocab_only 에 포함되지 않는다."""
         orig_stem, orig_josa = split_josa(original)
         orig_jamo = to_jamo(orig_stem)
         scored: list[tuple[str, float]] = []
         seen: set[str] = set()
+        medical_surfaces: set[str] = set()
 
         mlm_probs = self._mlm_probs_at_mask(text, start, end)
 
@@ -214,8 +365,10 @@ class KoGPT2Corrector:
             restored = term + harmonize_josa(term, orig_josa)
             mp = self._surface_mlm_prob(restored, mlm_probs)
             scored.append((restored, mp))
+            medical_surfaces.add(restored)
 
         rj_limit = self.roberta_max_jamo_distance
+        vocab_only: set[str] = set()
         if mlm_probs is not None:
             if self.roberta_full_vocab_jamo:
                 probs_cpu = mlm_probs.detach().float().cpu().view(-1)
@@ -248,6 +401,8 @@ class KoGPT2Corrector:
                     if restored == original:
                         continue
                     scored.append((restored, p))
+                    if restored not in medical_surfaces:
+                        vocab_only.add(restored)
                     n_added += 1
             else:
                 k = min(top_k * 2, int(mlm_probs.shape[0]))
@@ -270,12 +425,32 @@ class KoGPT2Corrector:
                     if restored == original:
                         continue
                     scored.append((restored, p))
+                    if restored not in medical_surfaces:
+                        vocab_only.add(restored)
+
+        # 단일 [MASK] 경로가 만든 surface 집합 (멀티토큰-only 식별용)
+        single_mask_surfaces = {s for s, _ in scored}
+
+        # 멀티토큰(2-subword) 후보 — 단일 MASK 경로가 구조적으로 못 만드는 조합
+        # (예: 타신→탓인 = 탓+##인, 조이→쪽이 = 쪽+##이) 커버.
+        # 원문 전체 surface(josa 포함) 2자에 한해 전체를 2-[MASK] 로 치환한다.
+        multi_only: set[str] = set()
+        if self.multi_token_enable and self.proposal_model is not None:
+            for surf, mp in self._multi_token_candidates(text, start, end, original):
+                if surf == original:
+                    continue
+                scored.append((surf, mp))
+                if surf not in single_mask_surfaces:
+                    multi_only.add(surf)
 
         merged: dict[str, float] = {}
         for surf, mp in scored:
             merged[surf] = max(merged.get(surf, 0.0), mp)
         scored_out = sorted(merged.items(), key=lambda x: -x[1])[:top_k]
-        return scored_out, mlm_probs
+        final_surfaces = {s for s, _ in scored_out}
+        multi_only &= final_surfaces
+        vocab_only &= final_surfaces
+        return scored_out, mlm_probs, multi_only, vocab_only
 
     def correct_text(
         self,
@@ -302,7 +477,7 @@ class KoGPT2Corrector:
             if stem in KOGPT2_PROTECTED_STEMS or original in KOGPT2_PROTECTED_STEMS:
                 continue
 
-            candidates_scored, mlm_probs = self._build_candidates(
+            candidates_scored, mlm_probs, multi_only, vocab_only = self._build_candidates(
                 out, start, end, original, top_k=top_k
             )
             if not candidates_scored:
@@ -315,6 +490,10 @@ class KoGPT2Corrector:
             best_cand: str | None = None
             best_mlm_prob = -1.0
 
+            # 단일경로 후보: 기존 NLL-기반 best 경쟁
+            # 멀티토큰 전용 후보: 별도 트랙 (MLM prob 기반)
+            mt_best: tuple[float, float, str] | None = None  # (mlm_p, nll, cand)
+
             for cand, mlm_p in candidates_scored:
                 if cand == original:
                     continue
@@ -322,6 +501,23 @@ class KoGPT2Corrector:
                     continue
                 trial = out[:start] + cand + out[end:]
                 nll = self._sent_nll(trial)
+
+                if cand in multi_only:
+                    # 멀티토큰 트랙: 원문이 MLM 상 매우 낮아야 하고(정상 단어 보호),
+                    # 후보는 절대/상대 prob 하한을 모두 통과해야 함. NLL 악화 금지.
+                    if orig_mlm_prob > self.multi_token_max_orig_prob:
+                        continue
+                    imp = base_nll - nll
+                    if imp < self.multi_token_nll_min_improve:
+                        continue
+                    if mlm_p < self.multi_token_accept_min_prob:
+                        continue
+                    if mlm_p < orig_mlm_prob * self.multi_token_accept_min_prob_ratio:
+                        continue
+                    if mt_best is None or mlm_p > mt_best[0]:
+                        mt_best = (mlm_p, nll, cand)
+                    continue
+
                 if nll < best_nll or (
                     math.isclose(nll, best_nll, rel_tol=0.0, abs_tol=1e-6)
                     and mlm_p > best_mlm_prob
@@ -356,6 +552,27 @@ class KoGPT2Corrector:
                     _, _, best_cand, best_nll, best_mlm_prob = relax[0]
                     passes_medical_nll_relax = True
 
+            # 멀티토큰 트랙: 단일트랙이 확정한 best 가 없거나 NLL 게이트 미통과인 경우
+            # mt_best (MLM 기반 조건 통과) 가 있으면 이를 채택한다. 단일트랙이 이미
+            # 좋은 best 를 잡았더라도 멀티토큰이 의미적으로 더 맞을 수 있어서, NLL 이
+            # 악화되지 않는 선에서 멀티토큰이 있으면 우선한다 (단일트랙은 잡힌 경우가
+            # 곳은→가스는 같은 의료 과교정일 때가 많음).
+            is_multi_only = False
+            improve_precheck = base_nll - best_nll if best_cand is not None else float("-inf")
+            ratio_precheck = (
+                improve_precheck / base_nll if base_nll > 0 and best_cand is not None else float("-inf")
+            )
+            single_passes_nll = (
+                best_cand is not None
+                and improve_precheck >= min_improve
+                and ratio_precheck >= min_improve_ratio
+            )
+
+            if mt_best is not None and not (single_passes_nll or passes_medical_nll_relax):
+                # 단일트랙 실패 시 멀티토큰으로 대체
+                best_mlm_prob, best_nll, best_cand = mt_best
+                is_multi_only = True
+
             if best_cand is None:
                 continue
 
@@ -363,13 +580,19 @@ class KoGPT2Corrector:
             improve_ratio = improve / base_nll if base_nll > 0 else 0.0
 
             passes_nll = improve >= min_improve and improve_ratio >= min_improve_ratio
+            # MLM 타이브레이크는 "의료사전 기반 후보" 용도. RoBERTa full-vocab jamo 경로로
+            # 올라온 후보는 NLL 개선이 없으면 채택하지 않는다 (예: 없는→있는, 곳은→것은
+            # 같은 의미 반전/수정 불요 케이스 차단).
+            is_vocab_only = best_cand in vocab_only
             passes_mlm_tie = (
-                math.isclose(improve, 0.0, rel_tol=0.0, abs_tol=1e-5)
+                not is_multi_only
+                and not is_vocab_only
+                and math.isclose(improve, 0.0, rel_tol=0.0, abs_tol=1e-5)
                 and best_mlm_prob > orig_mlm_prob + 1e-15
                 and best_mlm_prob >= _MLM_TIE_MIN_PROB
             )
 
-            if not passes_nll and not passes_mlm_tie and not passes_medical_nll_relax:
+            if not is_multi_only and not passes_nll and not passes_mlm_tie and not passes_medical_nll_relax:
                 continue
 
             out = out[:start] + best_cand + out[end:]
@@ -387,9 +610,12 @@ class KoGPT2Corrector:
                 "mlm_prob_corrected": round(best_mlm_prob, 8),
                 "mlm_tiebreak": passes_mlm_tie and not passes_nll,
                 "medical_nll_relax": passes_medical_nll_relax,
+                "multi_token": is_multi_only,
             })
             log_extra = ""
-            if passes_mlm_tie and not passes_nll:
+            if is_multi_only:
+                log_extra = ", 멀티토큰"
+            elif passes_mlm_tie and not passes_nll:
                 log_extra = ", MLM타이브레이크"
             elif passes_medical_nll_relax:
                 log_extra = ", 의료NLL완화"

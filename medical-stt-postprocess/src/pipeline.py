@@ -55,6 +55,17 @@ class MedicalSTTPipeline:
         kogpt2_min_improve: float = 0.15,
         kogpt2_min_improve_ratio: float = 0.05,
         kogpt2_min_span_chars: int = 2,
+        # KoGPT2 멀티토큰(2-subword) 후보 — 타신→탓인 / 조이→쪽이 커버
+        kogpt2_multi_token_enable: bool = True,
+        kogpt2_multi_token_span_chars: int = 2,
+        kogpt2_multi_token_k1: int = 10,
+        kogpt2_multi_token_k2: int = 12,
+        kogpt2_multi_token_max_candidates: int = 16,
+        kogpt2_multi_token_min_joint_prob: float = 5e-4,
+        kogpt2_multi_token_nll_min_improve: float = 0.01,
+        kogpt2_multi_token_accept_min_prob: float = 1e-3,
+        kogpt2_multi_token_accept_min_prob_ratio: float = 10.0,
+        kogpt2_multi_token_max_orig_prob: float = 1e-5,
         # Context MLM (KLUE-RoBERTa)
         enable_kobert_context: bool = True,
         kobert_model_name: str = "models/medical-roberta",
@@ -91,6 +102,16 @@ class MedicalSTTPipeline:
         self.kogpt2_min_improve = kogpt2_min_improve
         self.kogpt2_min_improve_ratio = kogpt2_min_improve_ratio
         self.kogpt2_min_span_chars = kogpt2_min_span_chars
+        self.kogpt2_multi_token_enable = kogpt2_multi_token_enable
+        self.kogpt2_multi_token_span_chars = kogpt2_multi_token_span_chars
+        self.kogpt2_multi_token_k1 = kogpt2_multi_token_k1
+        self.kogpt2_multi_token_k2 = kogpt2_multi_token_k2
+        self.kogpt2_multi_token_max_candidates = kogpt2_multi_token_max_candidates
+        self.kogpt2_multi_token_min_joint_prob = kogpt2_multi_token_min_joint_prob
+        self.kogpt2_multi_token_nll_min_improve = kogpt2_multi_token_nll_min_improve
+        self.kogpt2_multi_token_accept_min_prob = kogpt2_multi_token_accept_min_prob
+        self.kogpt2_multi_token_accept_min_prob_ratio = kogpt2_multi_token_accept_min_prob_ratio
+        self.kogpt2_multi_token_max_orig_prob = kogpt2_multi_token_max_orig_prob
 
         self.enable_kobert_context = enable_kobert_context
         self.kobert_model_name = kobert_model_name
@@ -153,6 +174,16 @@ class MedicalSTTPipeline:
                 # KLUE-RoBERTa 인스턴스 주입 (모델 중복 로드 방지, MLM 후보만)
                 proposal_model=kobert.model if kobert else None,
                 proposal_tokenizer=kobert.tokenizer if kobert else None,
+                multi_token_enable=self.kogpt2_multi_token_enable,
+                multi_token_span_chars=self.kogpt2_multi_token_span_chars,
+                multi_token_k1=self.kogpt2_multi_token_k1,
+                multi_token_k2=self.kogpt2_multi_token_k2,
+                multi_token_max_candidates=self.kogpt2_multi_token_max_candidates,
+                multi_token_min_joint_prob=self.kogpt2_multi_token_min_joint_prob,
+                multi_token_nll_min_improve=self.kogpt2_multi_token_nll_min_improve,
+                multi_token_accept_min_prob=self.kogpt2_multi_token_accept_min_prob,
+                multi_token_accept_min_prob_ratio=self.kogpt2_multi_token_accept_min_prob_ratio,
+                multi_token_max_orig_prob=self.kogpt2_multi_token_max_orig_prob,
             )
         return self._kogpt2_corrector
 

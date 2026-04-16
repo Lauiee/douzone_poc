@@ -25,7 +25,7 @@ def _maybe_process_json_list(raw: str, pipeline: MedicalSTTPipeline) -> str | No
     if not (s.startswith("[") or s.startswith("{")):
         return None
     try:
-        data = json.loads(s)
+        data = json.loads(s, strict=False)
     except json.JSONDecodeError:
         return None
     if isinstance(data, list) and data and all(
