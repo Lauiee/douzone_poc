@@ -330,9 +330,12 @@ class KoGPT2Corrector:
                     best_cand = cand
                     best_mlm_prob = mlm_p
 
+            improve = base_nll - best_nll if best_cand is not None else float("-inf")
+            improve_ratio = improve / base_nll if base_nll > 0 and best_cand is not None else float("-inf")
+
             passes_medical_nll_relax = False
-            if best_cand is None:
-                # NLL이 개선되는 후보가 없을 때: 의료사전 표면 + MLM 하한 + NLL 악화 상한
+            if best_cand is None or not (improve >= min_improve and improve_ratio >= min_improve_ratio):
+                # 정식 NLL 채택 실패 시: 의료사전 표면 + MLM 하한 + NLL 악화 상한으로 재평가
                 relax: list[tuple[float, float, str, float, float]] = []
                 for cand, mlm_p in candidates_scored:
                     if cand == original:

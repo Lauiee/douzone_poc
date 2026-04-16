@@ -144,11 +144,13 @@ class KoBERTContextCorrector:
         text: str,
         anomaly_threshold: float = 0.03,
         top_k: int = 30,
-        min_candidate_prob: float = 0.05,
+        min_candidate_prob: float = 0.0,
         max_word_edit_distance: int = 2,
         min_span_chars: int = 2,
         window_chars: int = 72,
     ) -> tuple[str, list[dict]]:
+        # Deprecated: top-k 고정 후보 방식으로 전환. 호환을 위해 인자만 유지.
+        _ = min_candidate_prob
         spans = self._word_spans(text)
         if not spans:
             return text, []
@@ -194,8 +196,6 @@ class KoBERTContextCorrector:
             o_jamo = to_jamo(score_stem)
             for c in cands:
                 if c.surface == score_stem:
-                    continue
-                if c.prob < min_candidate_prob:
                     continue
                 cand_stem = split_josa(c.surface)[0] if preserve_josa else c.surface
                 if abs(len(cand_stem) - len(score_stem)) > 1:

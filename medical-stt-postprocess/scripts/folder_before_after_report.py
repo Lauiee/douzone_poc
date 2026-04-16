@@ -98,13 +98,50 @@ def main() -> None:
         action="store_true",
         help="KoGPT2 PPL 단계 끄기 (빠른 회귀 확인용; 기본은 켬)",
     )
+    ap.add_argument(
+        "--dict",
+        type=Path,
+        default=_ROOT / "data" / "medical_dict.txt",
+        help="의료 사전 경로 (기본: data/medical_dict.txt)",
+    )
+    ap.add_argument(
+        "--span-reranker",
+        action="store_true",
+        help="Stage 5 Span Reranker 켜기 (실험용; 기본 끔, 과교정·소음 위험)",
+    )
+    ap.add_argument(
+        "--span-reranker-min-improve",
+        type=float,
+        default=None,
+        help="span_reranker NLL 절대 개선 하한 (미지정 시 파이프라인 기본값, 현재 0.1)",
+    )
+    ap.add_argument(
+        "--span-reranker-min-improve-ratio",
+        type=float,
+        default=None,
+        help="span_reranker NLL 상대 개선 하한 (미지정 시 파이프라인 기본값)",
+    )
     args = ap.parse_args()
 
     files = sorted(args.input_dir.glob("*.txt"))
     if not files:
         raise SystemExit(f"입력 txt 파일이 없습니다: {args.input_dir}")
 
-    pipeline = MedicalSTTPipeline(enable_kogpt2=not args.no_kogpt2)
+    dict_path = args.dict if args.dict.exists() else None
+    if dict_path is None:
+        print(f"경고: 사전 없음 {args.dict} — dict_path=None", file=sys.stderr)
+
+    sr_kw: dict = {
+        "dict_path": dict_path,
+        "enable_kogpt2": not args.no_kogpt2,
+        "enable_span_reranker": args.span_reranker,
+    }
+    if args.span_reranker_min_improve is not None:
+        sr_kw["span_reranker_min_improve"] = args.span_reranker_min_improve
+    if args.span_reranker_min_improve_ratio is not None:
+        sr_kw["span_reranker_min_improve_ratio"] = args.span_reranker_min_improve_ratio
+
+    pipeline = MedicalSTTPipeline(**sr_kw)
     sections: list[tuple[str, str, str]] = []
 
     for idx, path in enumerate(files, 1):

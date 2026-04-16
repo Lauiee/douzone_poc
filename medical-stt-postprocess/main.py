@@ -107,8 +107,8 @@ def main():
     parser.add_argument(
         "--kobert-min-cand-prob",
         type=float,
-        default=0.05,
-        help="후보 채택 최소 확률(기본 0.05)",
+        default=0.0,
+        help="(deprecated) top-k 방식으로 전환되어 사용하지 않음. 호환용 인자",
     )
     parser.add_argument("--kobert-max-word-edit", type=int, default=2)
     parser.add_argument("--kobert-min-span-chars", type=int, default=2)

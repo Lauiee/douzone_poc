@@ -4,6 +4,7 @@
 2. Medical confusion: 의료 용어 오인식 표만 고정 치환
 3. KoGPT2 PPL Span Correction (선택): 자모 유사도 후보 + GPT2 NLL 검증
 4. Context MLM (선택): KLUE-RoBERTa 문맥 기반 교정
+5. Span Reranker (선택): 멀티MASK 2어절 span + KoGPT2 NLL 재랭킹
 """
 
 import json
@@ -59,11 +60,19 @@ class MedicalSTTPipeline:
         kobert_model_name: str = "klue/roberta-large",
         kobert_anomaly_threshold: float = 0.01,
         kobert_top_k: int = 50,
-        kobert_min_candidate_prob: float = 0.05,
+        # Deprecated: top-k 기반으로 선별하므로 min prob는 실질적으로 사용하지 않음.
+        kobert_min_candidate_prob: float = 0.0,
         kobert_max_word_edit_distance: int = 2,
         kobert_jamo_max_edit_distance: int = 1,
         kobert_min_span_chars: int = 2,
         kobert_window_chars: int = 72,
+        # Span Reranker (멀티 MASK × NLL) — 기본 끔. 켤 경우 소음·과교정 위험 큼(실험용).
+        enable_span_reranker: bool = False,
+        span_reranker_span_words: int = 2,
+        span_reranker_per_mask_top_k: int = 5,
+        span_reranker_max_combinations: int = 25,
+        span_reranker_min_improve: float = 0.1,
+        span_reranker_min_improve_ratio: float = 0.015,
     ):
         self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -93,8 +102,16 @@ class MedicalSTTPipeline:
         self.kobert_min_span_chars = kobert_min_span_chars
         self.kobert_window_chars = kobert_window_chars
 
+        self.enable_span_reranker = enable_span_reranker
+        self.span_reranker_span_words = span_reranker_span_words
+        self.span_reranker_per_mask_top_k = span_reranker_per_mask_top_k
+        self.span_reranker_max_combinations = span_reranker_max_combinations
+        self.span_reranker_min_improve = span_reranker_min_improve
+        self.span_reranker_min_improve_ratio = span_reranker_min_improve_ratio
+
         self._kogpt2_corrector = None
         self._kobert_context_corrector = None
+        self._span_reranker = None
 
         logger.info("=== 의료 STT 후처리 파이프라인 초기화 ===")
         logger.info("의료 사전: %d개 용어", len(self.medical_terms))
@@ -108,6 +125,11 @@ class MedicalSTTPipeline:
             logger.info("Context MLM 준비: %s", kobert_model_name)
         else:
             logger.info("Context MLM 비활성화")
+
+        if enable_span_reranker:
+            logger.info("Span Reranker 준비 (kobert·kogpt2 주입)")
+        else:
+            logger.info("Span Reranker 비활성화")
 
         logger.info("파이프라인 초기화 완료")
 
@@ -150,6 +172,32 @@ class MedicalSTTPipeline:
                 medical_bonus=0.25,
             )
         return self._kobert_context_corrector
+
+    def _get_span_reranker(self):
+        from src.span_reranker import SpanReranker
+
+        if not self.enable_span_reranker:
+            return None
+        if self._span_reranker is None:
+            kb = self._get_kobert_context_corrector()
+            kg = self._get_kogpt2_corrector()
+            if kb is None or kg is None:
+                logger.warning("SpanReranker: RoBERTa 또는 KoGPT2 없음 → 비활성")
+                return None
+            self._span_reranker = SpanReranker(
+                roberta_model=kb.model,
+                roberta_tokenizer=kb.tokenizer,
+                kogpt2_model=kg.model,
+                kogpt2_tokenizer=kg.tokenizer,
+                device=self._device,
+                medical_terms=self.medical_terms,
+                span_words=self.span_reranker_span_words,
+                per_mask_top_k=self.span_reranker_per_mask_top_k,
+                max_combinations=self.span_reranker_max_combinations,
+                min_improve=self.span_reranker_min_improve,
+                min_improve_ratio=self.span_reranker_min_improve_ratio,
+            )
+        return self._span_reranker
 
     def process_text(self, text: str) -> PipelineResult:
         original = text
@@ -215,6 +263,25 @@ class MedicalSTTPipeline:
                 stages["kobert_context"] = {"output": text, "changes": [], "error": str(e)}
         else:
             stages["kobert_context"] = {"output": text, "changes": [], "skipped": True, "reason": "disabled"}
+
+        # Stage 5: Span Reranker (멀티 MASK + KoGPT2 NLL)
+        sr = self._get_span_reranker()
+        if sr is not None:
+            try:
+                text, sr_changes = sr.correct_text(text)
+                stages["span_reranker"] = {"output": text, "changes": sr_changes}
+                if sr_changes:
+                    logger.info("[Stage 5 - Span Reranker] %d건 교정", len(sr_changes))
+            except Exception as e:
+                logger.exception("Span Reranker 교정 실패: %s", e)
+                stages["span_reranker"] = {"output": text, "changes": [], "error": str(e)}
+        else:
+            stages["span_reranker"] = {
+                "output": text,
+                "changes": [],
+                "skipped": True,
+                "reason": "disabled_or_missing_models",
+            }
 
         logger.info("[출력] %s", text[:100] + ("..." if len(text) > 100 else ""))
         return PipelineResult(original=original, corrected=text, stages=stages)
