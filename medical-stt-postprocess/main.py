@@ -50,8 +50,42 @@ def main():
     )
     parser.add_argument("--kogpt2-model", type=str, default="skt/kogpt2-base-v2", help="KoGPT2 모델 경로/허브 ID")
     parser.add_argument("--kogpt2-top-k", type=int, default=40, help="KoGPT2 후보 개수")
-    parser.add_argument("--kogpt2-max-jamo-distance", type=int, default=2, help="KoGPT2 자모 후보 최대 거리")
-    parser.add_argument("--kogpt2-min-improve", type=float, default=0.04, help="KoGPT2 교정 최소 NLL 개선치")
+    parser.add_argument(
+        "--kogpt2-max-jamo-distance",
+        type=int,
+        default=2,
+        help="의료 사전 자모 후보 최대 거리 (기본 2; kobert와 별개)",
+    )
+    parser.add_argument(
+        "--kogpt2-roberta-max-jamo-distance",
+        type=int,
+        default=2,
+        help="RoBERTa MLM 후보 자모 거리 상한 (기본 2; kobert와 별개)",
+    )
+    parser.add_argument(
+        "--kogpt2-roberta-no-full-vocab",
+        action="store_true",
+        help="RoBERTa 후보를 softmax top-k만 사용 (기본: vocab 전체에서 MLM 하한+자모거리)",
+    )
+    parser.add_argument(
+        "--kogpt2-roberta-vocab-mlm-floor",
+        type=float,
+        default=0.3,
+        help="vocab 전체 스캔 시 MLM 확률 하한 (기본 0.3)",
+    )
+    parser.add_argument(
+        "--kogpt2-roberta-full-vocab-max-cand",
+        type=int,
+        default=512,
+        help="자모 필터 통과 후보 최대 개수 (기본 512)",
+    )
+    parser.add_argument("--kogpt2-min-improve", type=float, default=0.15, help="KoGPT2 교정 최소 NLL 개선치")
+    parser.add_argument(
+        "--kogpt2-min-improve-ratio",
+        type=float,
+        default=0.05,
+        help="KoGPT2 교정 최소 상대 NLL 개선 (base 대비)",
+    )
     parser.add_argument("--kogpt2-min-span-chars", type=int, default=2, help="KoGPT2 교정 최소 단어 길이")
 
     parser.add_argument(
@@ -101,7 +135,12 @@ def main():
         kogpt2_model_name=args.kogpt2_model,
         kogpt2_top_k=args.kogpt2_top_k,
         kogpt2_max_jamo_distance=args.kogpt2_max_jamo_distance,
+        kogpt2_roberta_max_jamo_distance=args.kogpt2_roberta_max_jamo_distance,
+        kogpt2_roberta_full_vocab_jamo=not args.kogpt2_roberta_no_full_vocab,
+        kogpt2_roberta_vocab_mlm_floor=args.kogpt2_roberta_vocab_mlm_floor,
+        kogpt2_roberta_full_vocab_max_cand=args.kogpt2_roberta_full_vocab_max_cand,
         kogpt2_min_improve=args.kogpt2_min_improve,
+        kogpt2_min_improve_ratio=args.kogpt2_min_improve_ratio,
         kogpt2_min_span_chars=args.kogpt2_min_span_chars,
         enable_kobert_context=use_kobert,
         kobert_model_name=args.kobert_model,

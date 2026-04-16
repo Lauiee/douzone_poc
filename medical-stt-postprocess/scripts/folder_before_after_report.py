@@ -93,14 +93,18 @@ def main() -> None:
         default=_ROOT / "full_before_after_comparison.md",
         help="출력 markdown 경로",
     )
+    ap.add_argument(
+        "--no-kogpt2",
+        action="store_true",
+        help="KoGPT2 PPL 단계 끄기 (빠른 회귀 확인용; 기본은 켬)",
+    )
     args = ap.parse_args()
 
     files = sorted(args.input_dir.glob("*.txt"))
     if not files:
         raise SystemExit(f"입력 txt 파일이 없습니다: {args.input_dir}")
 
-    # 리포트 생성은 빠른 회귀 확인 목적이라 기본적으로 KoGPT2를 끈다.
-    pipeline = MedicalSTTPipeline(enable_kogpt2=False)
+    pipeline = MedicalSTTPipeline(enable_kogpt2=not args.no_kogpt2)
     sections: list[tuple[str, str, str]] = []
 
     for idx, path in enumerate(files, 1):

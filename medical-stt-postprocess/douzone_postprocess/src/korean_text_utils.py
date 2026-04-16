@@ -2,6 +2,52 @@
 
 from __future__ import annotations
 
+# Mecab 없이 용언 활용 어미만 보고 STT 오인식이 아닌 문법형으로 간주 (과교정 방지).
+# 긴 어미를 먼저 매칭하도록 정렬해 둔다.
+VERB_FORM_ENDINGS: frozenset[str] = frozenset(
+    {
+        "면",
+        "고",
+        "서",
+        "며",
+        "니",
+        "지",
+        "도",
+        "만",
+        "으면",
+        "아서",
+        "어서",
+        "아도",
+        "어도",
+        "시고",
+        "시면",
+        "시며",
+        "시어",
+        "셔서",
+        "하면",
+        "하고",
+        "하며",
+        "해서",
+        "해",
+        "나요",
+        "나면",
+        "으나",
+        "게",
+    }
+)
+_VERB_FORM_ENDINGS_SORTED: tuple[str, ...] = tuple(
+    sorted(VERB_FORM_ENDINGS, key=len, reverse=True)
+)
+
+
+def looks_like_verb_conjugation(surface: str) -> bool:
+    """용언 활용형으로 보이면 True — STT 교정 스팬에서 제외."""
+    for ending in _VERB_FORM_ENDINGS_SORTED:
+        if len(surface) > len(ending) and surface.endswith(ending):
+            return True
+    return False
+
+
 JOSA_LIST = sorted(
     [
         "으로",

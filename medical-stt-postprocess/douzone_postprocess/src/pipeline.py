@@ -45,8 +45,14 @@ class MedicalSTTPipeline:
         enable_kogpt2: bool = True,
         kogpt2_model_name: str = "skt/kogpt2-base-v2",
         kogpt2_top_k: int = 40,
+        # kobert는 자모 1로 보수적으로 두고, KoGPT2 의료사전·RoBERTa 후보는 2까지 허용 (예: 이번↔입원)
         kogpt2_max_jamo_distance: int = 2,
-        kogpt2_min_improve: float = 0.04,
+        kogpt2_roberta_max_jamo_distance: int = 2,
+        kogpt2_roberta_full_vocab_jamo: bool = True,
+        kogpt2_roberta_vocab_mlm_floor: float = 0.3,
+        kogpt2_roberta_full_vocab_max_cand: int = 512,
+        kogpt2_min_improve: float = 0.15,
+        kogpt2_min_improve_ratio: float = 0.05,
         kogpt2_min_span_chars: int = 2,
         # Context MLM (KLUE-RoBERTa)
         enable_kobert_context: bool = True,
@@ -55,6 +61,7 @@ class MedicalSTTPipeline:
         kobert_top_k: int = 50,
         kobert_min_candidate_prob: float = 0.05,
         kobert_max_word_edit_distance: int = 2,
+        kobert_jamo_max_edit_distance: int = 1,
         kobert_min_span_chars: int = 2,
         kobert_window_chars: int = 72,
     ):
@@ -68,7 +75,12 @@ class MedicalSTTPipeline:
         self.kogpt2_model_name = kogpt2_model_name
         self.kogpt2_top_k = kogpt2_top_k
         self.kogpt2_max_jamo_distance = kogpt2_max_jamo_distance
+        self.kogpt2_roberta_max_jamo_distance = kogpt2_roberta_max_jamo_distance
+        self.kogpt2_roberta_full_vocab_jamo = kogpt2_roberta_full_vocab_jamo
+        self.kogpt2_roberta_vocab_mlm_floor = kogpt2_roberta_vocab_mlm_floor
+        self.kogpt2_roberta_full_vocab_max_cand = kogpt2_roberta_full_vocab_max_cand
         self.kogpt2_min_improve = kogpt2_min_improve
+        self.kogpt2_min_improve_ratio = kogpt2_min_improve_ratio
         self.kogpt2_min_span_chars = kogpt2_min_span_chars
 
         self.enable_kobert_context = enable_kobert_context
@@ -77,6 +89,7 @@ class MedicalSTTPipeline:
         self.kobert_top_k = kobert_top_k
         self.kobert_min_candidate_prob = kobert_min_candidate_prob
         self.kobert_max_word_edit_distance = kobert_max_word_edit_distance
+        self.kobert_jamo_max_edit_distance = kobert_jamo_max_edit_distance
         self.kobert_min_span_chars = kobert_min_span_chars
         self.kobert_window_chars = kobert_window_chars
 
@@ -111,7 +124,11 @@ class MedicalSTTPipeline:
                 device=self._device,
                 medical_terms=self.medical_terms,
                 max_jamo_distance=self.kogpt2_max_jamo_distance,
-                # KLUE-RoBERTa 인스턴스 주입 (모델 중복 로드 방지)
+                roberta_max_jamo_distance=self.kogpt2_roberta_max_jamo_distance,
+                roberta_full_vocab_jamo=self.kogpt2_roberta_full_vocab_jamo,
+                roberta_vocab_mlm_floor=self.kogpt2_roberta_vocab_mlm_floor,
+                roberta_full_vocab_max_cand=self.kogpt2_roberta_full_vocab_max_cand,
+                # KLUE-RoBERTa 인스턴스 주입 (모델 중복 로드 방지, MLM 후보만)
                 proposal_model=kobert.model if kobert else None,
                 proposal_tokenizer=kobert.tokenizer if kobert else None,
             )
@@ -127,7 +144,7 @@ class MedicalSTTPipeline:
                 device=self._device,
                 medical_terms=self.medical_terms,
                 protected_surfaces={"수속", "수속하면"},
-                jamo_max_edit_distance=2,
+                jamo_max_edit_distance=self.kobert_jamo_max_edit_distance,
                 alpha_mlm=1.0,
                 beta_jamo=0.8,
                 medical_bonus=0.25,
@@ -164,6 +181,7 @@ class MedicalSTTPipeline:
                     top_k=self.kogpt2_top_k,
                     min_improve=self.kogpt2_min_improve,
                     min_span_chars=self.kogpt2_min_span_chars,
+                    min_improve_ratio=self.kogpt2_min_improve_ratio,
                 )
                 stages["kogpt2_ppl"] = {"output": text, "changes": kg_changes}
                 if kg_changes:
