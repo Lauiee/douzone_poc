@@ -93,7 +93,7 @@ def main():
         action="store_true",
         help="Context MLM(KLUE RoBERTa 등) 문맥 교정 끄기 (기본: 켜짐)",
     )
-    parser.add_argument("--kobert-model", type=str, default="klue/roberta-large", help="Context MLM 모델 경로/허브 ID")
+    parser.add_argument("--kobert-model", type=str, default="models/medical-roberta", help="Context MLM 모델 경로/허브 ID")
     parser.add_argument(
         "--kobert-anomaly-threshold",
         type=float,

@@ -57,7 +57,7 @@ class MedicalSTTPipeline:
         kogpt2_min_span_chars: int = 2,
         # Context MLM (KLUE-RoBERTa)
         enable_kobert_context: bool = True,
-        kobert_model_name: str = "klue/roberta-large",
+        kobert_model_name: str = "models/medical-roberta",
         kobert_anomaly_threshold: float = 0.01,
         kobert_top_k: int = 50,
         # Deprecated: top-k 기반으로 선별하므로 min prob는 실질적으로 사용하지 않음.

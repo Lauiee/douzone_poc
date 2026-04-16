@@ -121,6 +121,12 @@ def main() -> None:
         default=None,
         help="span_reranker NLL 상대 개선 하한 (미지정 시 파이프라인 기본값)",
     )
+    ap.add_argument(
+        "--kobert-model",
+        type=str,
+        default=None,
+        help="Context MLM 모델 경로/허브 ID (미지정 시 파이프라인 기본값)",
+    )
     args = ap.parse_args()
 
     files = sorted(args.input_dir.glob("*.txt"))
@@ -140,6 +146,8 @@ def main() -> None:
         sr_kw["span_reranker_min_improve"] = args.span_reranker_min_improve
     if args.span_reranker_min_improve_ratio is not None:
         sr_kw["span_reranker_min_improve_ratio"] = args.span_reranker_min_improve_ratio
+    if args.kobert_model is not None:
+        sr_kw["kobert_model_name"] = args.kobert_model
 
     pipeline = MedicalSTTPipeline(**sr_kw)
     sections: list[tuple[str, str, str]] = []

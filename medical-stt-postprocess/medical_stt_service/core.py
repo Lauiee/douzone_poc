@@ -72,7 +72,7 @@ def build_pipeline():
         device=device,
         enable_kogpt2=_env_bool("MEDICAL_STT_USE_KOGPT2", False),
         enable_kobert_context=_env_bool("MEDICAL_STT_USE_CONTEXT_MLM", True),
-        kobert_model_name=kobert_model or "klue/roberta-large",
+        kobert_model_name=kobert_model or "models/medical-roberta",
     )
 
 
