@@ -4,13 +4,7 @@
 
 ## 대용량 모델 파일
 
-Git에는 용량 제한으로 다음을 포함하지 않습니다. 로컬에 두거나 변환 스크립트로 준비하세요.
-
-- `medical-stt-postprocess/third_party/pytorch_model.bin`
-- `medical-stt-postprocess/third_party/kmbert_vocab.tar`
-- `medical-stt-postprocess/models/kmbert-kurias-vocab-hf/model.safetensors`
-
-토크나이저·설정(`config.json`, `tokenizer.json` 등)은 저장소에 포함됩니다.
+Transformers가 Hugging Face에서 받는 가중치(`klue/roberta-large`, `skt/kogpt2-base-v2` 등)는 기본적으로 캐시에 내려받는다. 별도로 저장소에 넣어 둔 대용량 바이너리가 있다면 로컬 경로·환경변수로 지정하면 된다.
 
 ## 실행 예
 

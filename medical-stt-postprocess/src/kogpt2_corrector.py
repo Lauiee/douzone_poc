@@ -1,11 +1,8 @@
 """KoGPT2 기반 PPL Span Correction.
 
-변경사항 (KM-BERT 제거):
-- proposal_model(KM-BERT) 제거
-- 후보 생성: MASK 방식 → 자모 유사도 기반으로 교체
-  → 멀티토큰 단어(탓인, 입원 등)도 후보로 생성 가능
-- proposal_model 자리에 KLUE-RoBERTa 인스턴스 주입 옵션 유지
-  (kobert_context와 모델 공유, 중복 로드 방지)
+후보 생성은 의료 사전 자모 유사도를 기본으로 하고, 선택적으로 주입된
+KLUE-RoBERTa(MLM)로 단일 토큰 후보를 보완한다. Context MLM과 모델을
+공유하면 중복 로드를 피할 수 있다.
 """
 
 from __future__ import annotations
@@ -82,11 +79,7 @@ class KoGPT2Corrector:
         return nll
 
     def _jamo_candidates(self, word: str, max_jamo_dist: int | None = None) -> list[tuple[str, int]]:
-        """자모 유사도 기반 후보 생성.
-        
-        KM-BERT MASK 방식 대신 사용.
-        멀티토큰 단어(탓인, 입원 등)도 후보로 잡힘.
-        """
+        """의료 사전·자모 유사도 기반 후보 생성. 멀티토큰 단어도 후보에 포함."""
         dist_limit = max_jamo_dist if max_jamo_dist is not None else self.max_jamo_distance
         word_stem, _ = split_josa(word)
         word_jamo = to_jamo(word_stem)

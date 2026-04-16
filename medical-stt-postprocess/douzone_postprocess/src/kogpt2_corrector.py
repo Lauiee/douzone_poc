@@ -1,17 +1,21 @@
-"""KoGPT2 기반 문맥(PPL) 보정."""
+"""KoGPT2 기반 PPL Span Correction.
+
+후보 생성은 의료 사전 자모 유사도를 기본으로 하고, 선택적으로 주입된
+KLUE-RoBERTa(MLM)로 단일 토큰 후보를 보완한다. Context MLM과 모델을
+공유하면 중복 로드를 피할 수 있다.
+"""
 
 from __future__ import annotations
 
 import logging
 import re
-import itertools
 
 import Levenshtein
 import torch
-import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from src.korean_text_utils import speech_endings_compatible
+from src.jamo_corrector import to_jamo
+from src.korean_text_utils import speech_endings_compatible, split_josa
 
 logger = logging.getLogger(__name__)
 
@@ -22,19 +26,40 @@ class KoGPT2Corrector:
     def __init__(
         self,
         model_name: str = "skt/kogpt2-base-v2",
-        proposal_model_name: str = "madatnlp/km-bert",
         device: str | None = None,
+        medical_terms: set[str] | None = None,
+        max_jamo_distance: int = 2,
+        # KLUE-RoBERTa 인스턴스 주입 (optional, 모델 공유용)
+        proposal_model=None,
+        proposal_tokenizer=None,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        # KoGPT2: NLL 계산 전용
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(model_name)
         self.model.eval()
         self.model.to(self.device)
-        self.proposal_tokenizer = AutoTokenizer.from_pretrained(proposal_model_name)
-        self.proposal_model = AutoModelForMaskedLM.from_pretrained(proposal_model_name)
-        self.proposal_model.eval()
-        self.proposal_model.to(self.device)
+
+        self.medical_terms = medical_terms or set()
+        self.max_jamo_distance = max_jamo_distance
+
+        # 자모 캐시 미리 빌드
+        self._jamo_cache: dict[str, str] = {}
+        for term in self.medical_terms:
+            self._jamo_cache[term] = to_jamo(term)
+
+        # KLUE-RoBERTa (optional — MLM 후보 보조용, 없어도 동작)
+        self.proposal_model = proposal_model
+        self.proposal_tokenizer = proposal_tokenizer
+
         self._nll_cache: dict[str, float] = {}
+        logger.info(
+            "KoGPT2Corrector 초기화 완료 (의료사전 %d개, max_jamo_dist=%d, proposal_model=%s)",
+            len(self.medical_terms),
+            max_jamo_distance,
+            "RoBERTa(주입)" if proposal_model else "없음",
+        )
 
     def _word_spans(self, text: str) -> list[tuple[int, int, str]]:
         return [(m.start(), m.end(), m.group()) for m in _KOREAN.finditer(text)]
@@ -53,10 +78,35 @@ class KoGPT2Corrector:
         self._nll_cache[text] = nll
         return nll
 
-    def _candidate_words(self, text: str, start: int, end: int, top_k: int) -> list[str]:
+    def _jamo_candidates(self, word: str, max_jamo_dist: int | None = None) -> list[tuple[str, int]]:
+        """의료 사전·자모 유사도 기반 후보 생성. 멀티토큰 단어도 후보에 포함."""
+        dist_limit = max_jamo_dist if max_jamo_dist is not None else self.max_jamo_distance
+        word_stem, _ = split_josa(word)
+        word_jamo = to_jamo(word_stem)
+        candidates = []
+
+        for term in self.medical_terms:
+            if term == word_stem:
+                continue
+            if abs(len(term) - len(word_stem)) > dist_limit + 1:
+                continue
+            term_jamo = self._jamo_cache.get(term) or to_jamo(term)
+            jdist = Levenshtein.distance(word_jamo, term_jamo)
+            if jdist <= dist_limit:
+                candidates.append((term, jdist))
+
+        # 거리 오름차순
+        candidates.sort(key=lambda x: x[1])
+        return candidates
+
+    def _roberta_candidates(self, text: str, start: int, end: int, top_k: int = 30) -> list[str]:
+        """KLUE-RoBERTa MASK 후보 (주입된 경우만 사용, 단일토큰 한정)."""
+        if self.proposal_model is None or self.proposal_tokenizer is None:
+            return []
+        import torch.nn.functional as F
         mask_tok = self.proposal_tokenizer.mask_token
         mask_id = self.proposal_tokenizer.mask_token_id
-        if mask_tok is None or mask_id is None:
+        if not mask_tok or mask_id is None:
             return []
         masked = text[:start] + mask_tok + text[end:]
         enc = self.proposal_tokenizer(masked, return_tensors="pt")
@@ -73,54 +123,14 @@ class KoGPT2Corrector:
             logits = out.logits[0, midx]
         probs = F.softmax(logits.float(), dim=-1)
         k = min(top_k, int(probs.shape[0]))
-        vals, idx = torch.topk(probs, k=k)
-        words: list[str] = []
-        seen = set()
-        for i in range(k):
-            tid = int(idx[i].item())
-            tok = self.proposal_tokenizer.convert_ids_to_tokens(tid) or ""
-            tok = tok[2:] if tok.startswith("##") else tok
-            if not tok or not _KOREAN.fullmatch(tok):
-                continue
-            if len(tok) < 2:
-                continue
-            if tok in seen:
-                continue
-            seen.add(tok)
-            words.append(tok)
-        return words
-
-    def _insertion_candidates(self, text: str, pos: int, top_k: int) -> list[str]:
-        """문맥상 pos 앞에 들어갈 단어 후보."""
-        mask_tok = self.proposal_tokenizer.mask_token
-        mask_id = self.proposal_tokenizer.mask_token_id
-        if mask_tok is None or mask_id is None:
-            return []
-        masked = text[:pos] + mask_tok + text[pos:]
-        enc = self.proposal_tokenizer(masked, return_tensors="pt")
-        input_ids = enc["input_ids"].to(self.device)
-        attn = enc.get("attention_mask")
-        if attn is not None:
-            attn = attn.to(self.device)
-        pos_idx = (input_ids == mask_id).nonzero(as_tuple=True)
-        if len(pos_idx[0]) != 1:
-            return []
-        midx = int(pos_idx[1][0])
-        with torch.no_grad():
-            out = self.proposal_model(input_ids=input_ids, attention_mask=attn)
-            logits = out.logits[0, midx]
-        probs = F.softmax(logits.float(), dim=-1)
-        k = min(top_k, int(probs.shape[0]))
         _, idx = torch.topk(probs, k=k)
         words: list[str] = []
-        seen = set()
+        seen: set[str] = set()
         for i in range(k):
             tid = int(idx[i].item())
             tok = self.proposal_tokenizer.convert_ids_to_tokens(tid) or ""
             tok = tok[2:] if tok.startswith("##") else tok
             if not tok or not _KOREAN.fullmatch(tok):
-                continue
-            if len(tok) < 2:
                 continue
             if tok in seen:
                 continue
@@ -128,142 +138,99 @@ class KoGPT2Corrector:
             words.append(tok)
         return words
 
-    def _apply_word_replacements(
+    def _build_candidates(
         self,
         text: str,
-        spans: list[tuple[int, int, str]],
-        replacement_map: dict[int, str],
-    ) -> str:
-        out = text
-        for idx in sorted(replacement_map.keys(), reverse=True):
-            start, end, _ = spans[idx]
-            out = out[:start] + replacement_map[idx] + out[end:]
-        return out
+        start: int,
+        end: int,
+        original: str,
+        top_k: int,
+    ) -> list[str]:
+        """자모 유사도 + RoBERTa(optional) 후보 통합."""
+        orig_stem, orig_josa = split_josa(original)
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        # 1. 자모 유사도 기반 (멀티토큰 포함)
+        for term, _ in self._jamo_candidates(original):
+            if term in seen:
+                continue
+            seen.add(term)
+            # 조사 복원
+            from src.korean_text_utils import harmonize_josa
+            restored = term + harmonize_josa(term, orig_josa)
+            candidates.append(restored)
+
+        # 2. RoBERTa MASK 기반 (단일토큰, optional 보완)
+        for word in self._roberta_candidates(text, start, end, top_k=top_k):
+            if word in seen or word == original:
+                continue
+            seen.add(word)
+            candidates.append(word)
+
+        return candidates[:top_k]
 
     def correct_text(
         self,
         text: str,
         top_k: int = 40,
-        max_word_edit_distance: int = 1,
-        min_improve: float = 0.06,
+        min_improve: float = 0.04,
         min_span_chars: int = 2,
-        span_words: int = 2,
-        per_word_top_k: int = 6,
-        max_combinations: int = 8,
-        min_improve_ratio: float = 0.03,
+        min_improve_ratio: float = 0.02,
     ) -> tuple[str, list[dict]]:
         self._nll_cache.clear()
-        spans = self._word_spans(text)
-        if not spans:
-            return text, []
-        spans.sort(key=lambda x: x[0])
-
         out = text
         changes: list[dict] = []
-        i = 0
-        while True:
-            spans = self._word_spans(out)
-            if i >= len(spans):
-                break
-            if len(spans[i][2]) < min_span_chars:
-                i += 1
+
+        # 역순 처리로 offset 관리 단순화
+        spans = self._word_spans(out)
+        spans.sort(key=lambda x: x[0], reverse=True)
+
+        for start, end, original in spans:
+            if len(original) < min_span_chars:
                 continue
 
-            left = max(0, i - (span_words // 2))
-            right = min(len(spans), left + span_words)
-            left = max(0, right - span_words)
-            window_indices = list(range(left, right))
-            if not window_indices:
-                i += 1
+            candidates = self._build_candidates(out, start, end, original, top_k=top_k)
+            if not candidates:
                 continue
 
             base_nll = self._sent_nll(out)
-            per_word_options: list[list[str]] = []
-            for wi in window_indices:
-                s, e, w = spans[wi]
-                opts = [w]
-                if len(w) >= min_span_chars:
-                    cands = self._candidate_words(out, s, e, top_k=top_k)
-                    for cand in cands[:per_word_top_k]:
-                        if cand == w:
-                            continue
-                        if abs(len(cand) - len(w)) > 1:
-                            continue
-                        if Levenshtein.distance(w, cand) > max_word_edit_distance:
-                            continue
-                        if not speech_endings_compatible(w, cand):
-                            continue
-                        opts.append(cand)
-                    # 삽입 후보는 window 중심 토큰에만 허용(조합 폭발 방지)
-                    center_wi = window_indices[len(window_indices) // 2]
-                    if wi == center_wi:
-                        ins = self._insertion_candidates(out, s, top_k=top_k)
-                        for ins_word in ins[:2]:
-                            if len(ins_word) < 2:
-                                continue
-                            opts.append(ins_word + w)
-                # 중복 제거
-                uniq = []
-                seen = set()
-                for o in opts:
-                    if o not in seen:
-                        seen.add(o)
-                        uniq.append(o)
-                per_word_options.append(uniq)
-
-            all_product = itertools.product(*per_word_options)
             best_nll = base_nll
-            best_repl: dict[int, str] = {}
-            checked = 0
-            for combo in all_product:
-                if checked >= max_combinations:
-                    break
-                checked += 1
-                repl = {}
-                changed = False
-                for j, wi in enumerate(window_indices):
-                    original = spans[wi][2]
-                    cand = combo[j]
-                    if cand != original:
-                        repl[wi] = cand
-                        changed = True
-                if not changed:
+            best_cand: str | None = None
+
+            for cand in candidates:
+                if cand == original:
                     continue
-                trial = self._apply_word_replacements(out, spans, repl)
+                if not speech_endings_compatible(original, cand):
+                    continue
+                trial = out[:start] + cand + out[end:]
                 nll = self._sent_nll(trial)
                 if nll < best_nll:
                     best_nll = nll
-                    best_repl = repl
+                    best_cand = cand
+
+            if best_cand is None:
+                continue
 
             improve = base_nll - best_nll
-            improve_ratio = (improve / base_nll) if base_nll > 0 else 0.0
-            if best_repl and improve >= min_improve and improve_ratio >= min_improve_ratio:
-                before = out
-                out = self._apply_word_replacements(out, spans, best_repl)
-                new_spans = self._word_spans(out)
-                # 변경 내역 기록
-                for wi, cand in sorted(best_repl.items()):
-                    os, oe, ow = spans[wi]
-                    # 변경 후 동일 인덱스 기준으로 범위 기록 (근사)
-                    ns, ne, _ = new_spans[min(wi, len(new_spans) - 1)]
-                    changes.append(
-                        {
-                            "type": "kogpt2_ppl_span",
-                            "start": ns,
-                            "end": ne,
-                            "original": ow,
-                            "corrected": cand,
-                            "nll_before": round(base_nll, 6),
-                            "nll_after": round(best_nll, 6),
-                            "improve": round(improve, 6),
-                            "improve_ratio": round(improve_ratio, 6),
-                            "window_before": before[spans[left][0]:spans[right - 1][1]],
-                        }
-                    )
-                # 변경한 인덱스 근처부터 재탐색
-                i = max(0, left - 1)
-            else:
-                i += 1
+            improve_ratio = improve / base_nll if base_nll > 0 else 0.0
 
+            if improve < min_improve or improve_ratio < min_improve_ratio:
+                continue
+
+            out = out[:start] + best_cand + out[end:]
+            changes.append({
+                "type": "kogpt2_ppl_span",
+                "start": start,
+                "end": end,
+                "original": original,
+                "corrected": best_cand,
+                "nll_before": round(base_nll, 6),
+                "nll_after": round(best_nll, 6),
+                "improve": round(improve, 6),
+                "improve_ratio": round(improve_ratio, 6),
+            })
+            logger.info("[KoGPT2] '%s' → '%s' (NLL개선 %.4f)", original, best_cand, improve)
+
+        changes.reverse()
         return out, changes
-

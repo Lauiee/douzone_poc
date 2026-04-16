@@ -62,23 +62,18 @@ def default_dict_path(root: Path) -> str | None:
 
 def build_pipeline():
     root = ensure_src_on_path()
-    from src.pipeline import MedicalSTTPipeline, default_kmbert_model_path
+    from src.pipeline import MedicalSTTPipeline
 
     dict_path = os.environ.get("MEDICAL_STT_DICT", "").strip() or default_dict_path(root)
     device = os.environ.get("MEDICAL_STT_DEVICE", "").strip() or None
-    model = os.environ.get("MEDICAL_STT_MODEL", "").strip() or None
-    mlm_path = os.environ.get("MEDICAL_STT_MLM_MODEL", "").strip() or None
-    enable_mlm = not _env_bool("MEDICAL_STT_NO_MLM", False)
+    kobert_model = os.environ.get("MEDICAL_STT_MODEL", "").strip() or None
 
     return MedicalSTTPipeline(
         dict_path=dict_path,
-        model_name=model or default_kmbert_model_path(),
         device=device,
-        enable_bert=not _env_bool("MEDICAL_STT_NO_BERT", False),
-        enable_mlm=enable_mlm,
-        mlm_model_path=mlm_path if enable_mlm else None,
         enable_kogpt2=_env_bool("MEDICAL_STT_USE_KOGPT2", False),
         enable_kobert_context=_env_bool("MEDICAL_STT_USE_CONTEXT_MLM", True),
+        kobert_model_name=kobert_model or "klue/roberta-large",
     )
 
 

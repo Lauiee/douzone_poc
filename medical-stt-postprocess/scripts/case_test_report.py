@@ -20,7 +20,6 @@ def _collect_changes(stages: dict) -> list[str]:
     order = [
         "rule_based",
         "medical_confusion",
-        "mlm_refine",
         "kogpt2_ppl",
         "kobert_context",
     ]

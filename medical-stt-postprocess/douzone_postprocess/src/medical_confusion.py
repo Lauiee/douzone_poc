@@ -39,7 +39,7 @@ MLM_SURFACE_BLOCKS: dict[str, set[str]] = {
     "힘들어요": set(),
 }
 
-# MlmCorrector 등에서 legacy 이름으로 쓰는 합집합
+# 레거시 호환용 별칭 합집합
 DEFAULT_CONFUSION_SET: dict[str, set[str]] = {
     **DEFAULT_MEDICAL_CONFUSION_SET,
     **MLM_SURFACE_BLOCKS,

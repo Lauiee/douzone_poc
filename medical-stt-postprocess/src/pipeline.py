@@ -1,5 +1,5 @@
 """
-전체 후처리 파이프라인 (KM-BERT 제거, KLUE-RoBERTa 단일화)
+전체 후처리 파이프라인
 1. Rule-based: STT 구문 + 숫자/단위/약어
 2. Medical confusion: 의료 용어 오인식 표만 고정 치환
 3. KoGPT2 PPL Span Correction (선택): 자모 유사도 후보 + GPT2 NLL 검증

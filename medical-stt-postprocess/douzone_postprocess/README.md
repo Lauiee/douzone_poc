@@ -6,11 +6,11 @@
 
 | 경로 | 설명 |
 |------|------|
-| `src/` | Rule-based, MLM, Context MLM 등 **전체 후처리 코드** |
+| `src/` | Rule-based, Medical confusion, KoGPT2, Context MLM(KLUE-RoBERTa) 등 **전체 후처리 코드** |
 | `data/` | `medical_dict.txt` 등 |
 | `*.py` | FastAPI 라우터·싱글톤 로더 |
 
-`models/`(로컬 KM-BERT MLM 가중치 등)는 용량 때문에 **기본 미포함**일 수 있다. 없으면 `pipeline.py` 기본값대로 허브/환경변수를 쓴다. 필요하면 상위 저장소의 `models/`를 이 폴더 아래에 같이 복사한다.
+`models/`에 로컬 체크포인트를 두고 `MEDICAL_STT_MODEL` 등으로 경로를 지정할 수 있다. 없으면 Hugging Face 허브 기본값을 쓴다.
 
 ## 의존성
 
