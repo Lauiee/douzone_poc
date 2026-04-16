@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+.env.*
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# 로그·로컬 산출물
+*.log
+medical-stt-postprocess/output.log
+
+# 대용량 모델 가중치·아카이브 (GitHub 용량 제한 — 별도 배포 또는 스크립트로 준비)
+medical-stt-postprocess/third_party/pytorch_model.bin
+medical-stt-postprocess/third_party/kmbert_vocab.tar
+medical-stt-postprocess/models/**/*.safetensors

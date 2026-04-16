@@ -1,0 +1,28 @@
+<!DOCTYPE html><html lang='ko'><head><meta charset='utf-8'><title>케이스 테스트 전·후</title><style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 1rem 1.5rem; max-width: 1600px; }
+    h1 { font-size: 1.25rem; }
+    h2 { margin-top: 2rem; font-size: 1.1rem; border-bottom: 1px solid #ccc; }
+    h3 { font-size: 1rem; margin-top: 1.5rem; }
+    .meta { color: #555; font-size: 0.9rem; margin-bottom: 1rem; }
+    .pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 8px 0 16px;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .pair { grid-template-columns: 1fr; } }
+    .col { border: 1px solid #ddd; border-radius: 6px; padding: 10px; background: #fafafa; }
+    .col h4 { margin: 0 0 8px; font-size: 0.85rem; color: #333; }
+    .col pre {
+      margin: 0; white-space: pre-wrap; word-break: break-word;
+      font-size: 0.88rem; line-height: 1.45; max-height: 420px; overflow: auto;
+    }
+    .orig { border-left: 4px solid #c62828; }
+    .corr { border-left: 4px solid #2e7d32; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; }
+    .same { background: #e8f5e9; color: #1b5e20; }
+    .diff { background: #fff3e0; color: #e65100; }
+    ul.changes { font-size: 0.85rem; margin: 8px 0 0; padding-left: 1.2rem; }
+    </style></head><body><h1>케이스 테스트 전·후 비교</h1><p class='meta'>생성(UTC) 2026-04-14T08:23:34.763576+00:00 · result_type1.json, result_type3.json</p><h2>Type 1</h2><h3>Type 1 — 샘플 1 <span class='badge diff'>변경</span></h3><div class='pair'><div class='col orig'><h4>원문</h4><pre>오늘 어디가 불편하셔서 오셨어요? 일주일 정도 된 것 같은데 계단 오르내리면 가슴이 두근거리면서 쪼이는 통증이 있어요. 왼쪽 어깨랑 팔까지 아플 때도 있어요. 혹시 통증 있으실 때 어떻게 하셨어요? 오 분, 십 분 잠깐 쉬면 또 괜찮더라고요. 지금 약을 먹고 계신 거 있으세요? 고혈압약은 오 년 전부터 먹고 있는데 먹다 안 먹다 해요.</pre></div><div class='col corr'><h4>교정</h4><pre>오늘 어디가 불편하셔서 오셨어요? 일주일 정도 된 것 같은데 계단 오르내리면 가슴이 두근거리면서 쪼이는 통증이 있어요. 왼쪽 어깨랑 팔까지 아플 때도 있어요. 혹시 통증 있으실 때 어떻게 하셨어요? 5분, 10분 잠깐 쉬면 또 괜찮더라고요. 지금 약을 먹고 계신 거 있으세요? 고혈압약은 5년 전부터 먹고 있는데 먹다 안 먹다 해요.</pre></div></div><ul class='changes'><li>rule_based: `오 분` → `5분`</li><li>rule_based: `십 분` → `10분`</li><li>rule_based: `오 년` → `5년`</li></ul><h3>Type 1 — 샘플 2 <span class='badge diff'>변경</span></h3><div class='pair'><div class='col orig'><h4>원문</h4><pre>혈압이 백육십에 백인데 안정 한번 하시고 다시 한번 재보고 심장 쪽에 문제 있는지 혈액 검사랑 심전도 한 번 해보시죠. 검사 결과가 바로 나오나요? 네 한 십분 이십분이면 나오니까 검사하고 좀 다시 보시죠.</pre></div><div class='col corr'><h4>교정</h4><pre>혈압이 160/100인데 안정 한번 하시고 다시 한번 재보고 심장 쪽에 문제 있는지 혈액 검사랑 심전도 1번 해보시죠. 검사 결과가 바로 나오나요? 네 10분 20분이면 나오니까 검사하고 좀 다시 보시죠.</pre></div></div><ul class='changes'><li>rule_based: `한 십분` → `10분`</li><li>rule_based: `백육십에 백` → `160/100`</li><li>rule_based: `이십분` → `20분`</li><li>rule_based: `한 번` → `1번`</li></ul><h2>Type 3</h2><h3>Type 3 — 샘플 1 <span class='badge diff'>변경</span></h3><div class='pair'><div class='col orig'><h4>원문</h4><pre>박준호님 들어오세요. 어디가 어떻게 아프신가요? 어제 저녁부터 취한 것 같더니 지금은 오른쪽 발리뼈가 너무 아파서 걷기도 힘들어요. 침대에 누워보세요. 개를 좀 눌러보겠습니다. 자 여기를 누를 때랑 뗄 때 중 언제 더 아프신가요? 아 손을 뗄 때 꾀안이 울리면서 펄 싱터가 파요 소를 뗄 때 아픈 반동성 약풍이 뚜렷하네요. 맹장염 즉 극성충수염입니다. 수술해야 하나요? 그냥 약으로 치료하면 안될까요?</pre></div><div class='col corr'><h4>교정</h4><pre>박준호님 들어오세요. 어디가 어떻게 아프신가요? 어제 저녁부터 취한 것 같더니 지금은 오른쪽 발리뼈가 너무 아파서 걷기도 힘들어. 침대에 누워보세요. 개를 좀 눌러보겠습니다. 자 여기를 누를 때랑 뗄 때 중 언제 더 아프신가요? 아 손을 뗄 때 꾀안이 울리면서 펄 싱터가 파요 소를 뗄 때 아픈 반동통 압통이 뚜렷하네요. 맹장염 즉 급성충수염입니다. 수술해야 하나? 그냥 약으로 치료하면 안될까요?</pre></div></div><ul class='changes'><li>medical_confusion: `극성충수염입니다` → `급성충수염입니다`</li><li>medical_confusion: `반동성` → `반동통`</li><li>medical_confusion: `약풍` → `압통`</li><li>mlm_refine: `힘들어요` → `힘들어`</li><li>mlm_refine: `하나요` → `하나`</li></ul><h3>Type 3 — 샘플 2 <span class='badge diff'>변경</span></h3><div class='pair'><div class='col orig'><h4>원문</h4><pre>증인 실에서 터지면 복막염이 될 수 있습니다. 타이밍이 중요해서 오늘 바로 응급 수술을 해야 합니다. 알겠습니다. 그럼 바로 이번 수속하면 되나요? 네, 지금부터는 물도 드시면 안 되는 절대 금식입니다. 바로 수술 전 검사 진행할게요.</pre></div><div class='col corr'><h4>교정</h4><pre>증인 실에서 터지면 복막염이 될 수 있습니다. 타이밍이 중요해서 오늘 바로 응급 수술을 해야 합니다. 알겠습니다. 그럼 바로 입원 수속하면 되나요? 네, 지금부터는 물도 드시면 안 되는 절대 금식입니다. 바로 수술 전 검사 진행할게요.</pre></div></div><ul class='changes'><li>kobert_context: `이번` → `입원`</li></ul></body></html>
